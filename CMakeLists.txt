@@ -1,0 +1,1 @@
+project(PumexApp LANGUAGES C CXX VERSION 0.0.1)
