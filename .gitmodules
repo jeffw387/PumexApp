@@ -1,3 +1,3 @@
-[submodule "subprojects/pumex/pumex"]
-	path = subprojects/pumex/pumex
+[submodule "external/pumex"]
+	path = external/pumex
 	url = https://github.com/pumexx/pumex.git
