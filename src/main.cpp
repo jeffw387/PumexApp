@@ -1,4 +1,4 @@
-#include "Pumex.h"
+#include "pumex/Pumex.h"
 
 int main()
 {
