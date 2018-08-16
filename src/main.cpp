@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint32_t ImageCount = 3U;
+constexpr uint32_t BufferCount = 3U;
 
 struct AssetData {
   enum { Triangle, Cube, Cylinder, IcosphereSub2, Pentagon, COUNT };
@@ -15,7 +15,7 @@ struct AssetData {
                                           "content/models/cylinder.gltf",
                                           "content/models/icosphereSub2.gltf",
                                           "content/models/pentagon.gltf"};
-} assetData;
+};
 
 struct MaterialData {
   enum { Red, Green, Blue, White, Black, COUNT };
@@ -24,7 +24,8 @@ struct MaterialData {
     glm::vec4 color;
   };
   std::array<Material, COUNT> materials;
-} materialData;
+  std::shared_ptr<pumex::Buffer<std::array<Material, COUNT>>> materialBuffer;
+};
 
 struct LightData {
   struct Light {
@@ -32,9 +33,50 @@ struct LightData {
     glm::vec4 color;
   };
 
-  static constexpr auto COUNT = 3U;
-  std::array<Light, COUNT> lights;
-} lightData;
+  std::vector<Light> lights;
+  std::shared_ptr<pumex::Buffer<std::vector<Light>>> lightsBuffer;
+};
+
+struct CameraData {
+  CameraData(std::shared_ptr<pumex::DeviceMemoryAllocator> buffersAllocator) {
+    cameraBuffer = std::make_shared<pumex::Buffer<pumex::Camera>>(
+      buffersAllocator,
+      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+      pumex::pbPerSurface,
+      pumex::swOnce,
+      true);
+  }
+  std::shared_ptr<pumex::Buffer<pumex::Camera>> cameraBuffer;
+};
+
+struct InstanceData {
+  struct Matrices {
+    glm::mat4 model;
+    glm::mat4 mvp;
+  };
+  using InstanceBuffer = std::shared_ptr<pumex::Buffer<std::vector<Matrices>>>;
+
+  InstanceData(
+    std::shared_ptr<pumex::DeviceMemoryAllocator> instanceBuffersAllocator) {
+    for (auto& buffer : instanceBuffers) {
+      buffer = InstanceBuffer::element_type(
+        instanceBuffersAllocator,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        pumex::pbPerDevice,
+        pumex::swForEachImage,
+        true);
+    }
+  }
+  std::array<InstanceBuffer, BufferCount> instanceBuffers;
+};
+
+struct ApplicationData {
+  AssetData assetData;
+  MaterialData materialData;
+  LightData lightData;
+  CameraData cameraData;
+  InstanceData instanceData;
+};
 
 int main() {
   std::vector<std::string> requestedInstanceExtensions = {"VK_KHR_surface"};
@@ -50,7 +92,7 @@ int main() {
   std::vector<std::string> requestedExtensions = {"VK_KHR_swapchain"};
   auto device = viewer->addDevice(0, requestedExtensions);
   auto surfaceTraits = pumex::SurfaceTraits(
-    ImageCount,
+    BufferCount,
     VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
     1,
     VK_PRESENT_MODE_FIFO_KHR,
@@ -71,22 +113,19 @@ int main() {
     modelLoadFunc(i);
   }
 
-  // allocate 64 MB for vertex and index buffers
   auto verticesAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     64 * 1024 * 1024,
     pumex::DeviceMemoryAllocator::FIRST_FIT);
 
-  // allocate 16 MB for frame buffers
   auto frameBufferAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     16 * 1024 * 1024,
     pumex::DeviceMemoryAllocator::FIRST_FIT);
 
-  // allocate 1 MB for uniform and storage buffers
   auto buffersAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-    1 * 1024 * 1024,
+    16 * 1024 * 1024,
     pumex::DeviceMemoryAllocator::FIRST_FIT);
 
   std::vector<pumex::QueueTraits> queueTraits{
@@ -170,15 +209,22 @@ int main() {
      "main"},
     {VK_SHADER_STAGE_FRAGMENT_BIT,
      std::make_shared<pumex::ShaderModule>(viewer, "shaders/3D/frag.spv"),
-     "main"}
-};
+     "main"}};
 
-pipeline->vertexInput = {{0, VK_VERTEX_INPUT_RATE_VERTEX, requiredSemantics}};
+  pipeline->vertexInput = {{0, VK_VERTEX_INPUT_RATE_VERTEX, requiredSemantics}};
 
-pipeline->blendAttachments = {{VK_FALSE, 0xF}};
+  pipeline->blendAttachments = {{VK_FALSE, 0xF}};
 
-ortho3Droot->addChild(pipeline);
+  ortho3Droot->addChild(pipeline);
 
-viewer->run();
-return 0;
+  for (auto i = 0U; i < AssetData::COUNT; ++i) {
+    auto assetNode = std::make_shared<pumex::AssetNode>(assetData.assets[i]);
+    pipeline->addChild(assetNode);
+  }
+
+  auto cameraData = std::make_shared<CameraData>(buffersAllocator);
+  auto instanceData = std::make_shared<InstanceData>(buffersAllocator);
+
+  viewer->run();
+  return 0;
 }
