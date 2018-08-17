@@ -111,6 +111,7 @@ struct InstanceData {
     glm::mat4 model;
     glm::mat4 mvp;
   };
+  std::array<std::vector<Matrices>, BufferCount> matrices;
   using InstanceBuffer = pumex::Buffer<std::vector<Matrices>>;
   std::shared_ptr<InstanceBuffer> instanceBuffer;
 
