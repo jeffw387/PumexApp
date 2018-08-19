@@ -24,6 +24,7 @@ layout(set = 0, binding = 4) uniform Lights {
   uint LightCount;
 } lights;
 
+// per instance
 struct InstanceData {
   mat4 M;
   mat4 MVP;
@@ -40,9 +41,7 @@ layout(std430, set = 0, binding = 5) readonly buffer Instance
 
 // --shader interface--
 layout(location = 0) out vec3 normal_CameraSpace;
-layout(location = 1) out flat uint materialIndex;
-layout(location = 2) out flat uint textureIndex;
-layout(location = 3) out vec3 lightDirection_CameraSpace[MaxLights];
+layout(location = 1) out vec3 lightDirection_CameraSpace[MaxLights];
 out gl_PerVertex
 {
   vec4 gl_Position;
@@ -55,8 +54,6 @@ void main()
   mat4 M = instanceData.M;
   mat4 V = camera.view;
   mat4 P = camera.projection;
-  materialIndex = instanceData.materialIndex;
-  textureIndex = instanceData.textureIndex;
 
   gl_Position = MVP * vec4(vertexPosition_ModelSpace, 1.0);
     
