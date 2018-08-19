@@ -1,5 +1,6 @@
 #include <pumex/AssetLoaderAssimp.h>
 #include <pumex/Pumex.h>
+#include <tbb/tbb.h>
 #include <array>
 #include <glm/glm.hpp>
 #include <map>
@@ -13,11 +14,11 @@ struct AssetData {
   enum AssetID { Triangle, Cube, Cylinder, IcosphereSub2, Pentagon, COUNT };
   pumex::AssetLoaderAssimp loader;
   std::array<std::shared_ptr<pumex::Asset>, COUNT> assets;
-  std::array<const char*, COUNT> paths = {"content/models/triangle.gltf",
-                                          "content/models/cube.gltf",
-                                          "content/models/cylinder.gltf",
-                                          "content/models/icosphereSub2.gltf",
-                                          "content/models/pentagon.gltf"};
+  std::array<const char*, COUNT> paths = {"content/models/triangle.blend",
+                                          "content/models/cube.blend",
+                                          "content/models/cylinder.blend",
+                                          "content/models/icosphereSub2.blend",
+                                          "content/models/pentagon.blend"};
 
   std::array<pumex::DrawIndexedIndirectCommand, COUNT> drawCmds;
   std::shared_ptr<
@@ -30,7 +31,8 @@ struct AssetData {
     std::shared_ptr<pumex::DeviceMemoryAllocator> vertexAllocator,
     std::shared_ptr<pumex::Viewer> viewer,
     const std::vector<pumex::VertexSemantic>& requiredSemantic) {
-    std::vector<pumex::AssetBufferVertexSemantics> semantics{{PrimaryRenderMask, requiredSemantic}};
+    std::vector<pumex::AssetBufferVertexSemantics> semantics{
+      {PrimaryRenderMask, requiredSemantic}};
     assetBuffer = std::make_shared<pumex::AssetBuffer>(
       semantics, bufferAllocator, vertexAllocator);
 
@@ -51,6 +53,11 @@ struct MaterialData {
 
   struct Material {
     glm::vec4 color;
+
+    void registerProperties(const pumex::Material& material) {}
+
+    void registerTextures(
+      const std::map<pumex::TextureSemantic::Type, uint32_t>& textureIndices) {}
   };
   std::array<Material, COUNT> materials = {glm::vec4{1.f, 0.f, 0.f, 1.f},
                                            glm::vec4{0.f, 1.f, 0.f, 1.f},
@@ -110,6 +117,10 @@ struct InstanceData {
   struct Matrices {
     glm::mat4 model;
     glm::mat4 mvp;
+    uint32_t materialIndex;
+    uint32_t textureIndex;
+    uint32_t padding0;
+    uint32_t padding1;
   };
   std::array<std::vector<Matrices>, BufferCount> matrices;
   using InstanceBuffer = pumex::Buffer<std::vector<Matrices>>;
@@ -131,6 +142,26 @@ struct ApplicationData {
   std::shared_ptr<LightData> lightData;
   std::shared_ptr<CameraData> cameraData;
   std::shared_ptr<InstanceData> instanceData;
+
+  ApplicationData(
+    std::shared_ptr<pumex::DeviceMemoryAllocator> bufferAllocator,
+    std::shared_ptr<pumex::DeviceMemoryAllocator> vertexAllocator,
+    std::shared_ptr<pumex::Viewer> viewer,
+    const std::vector<pumex::VertexSemantic>& requiredSemantic) {
+    assetData = std::make_shared<AssetData>(
+      bufferAllocator, vertexAllocator, viewer, requiredSemantic);
+    materialData = std::make_shared<MaterialData>(bufferAllocator);
+    lightData = std::make_shared<LightData>(bufferAllocator);
+    cameraData = std::make_shared<CameraData>(bufferAllocator);
+    instanceData = std::make_shared<InstanceData>(bufferAllocator);
+  }
+
+  void update(
+    std::shared_ptr<pumex::Viewer> viewer,
+    double updateBeginTime,
+    double updateDuration) {}
+  void renderStart() {}
+  void surfaceRenderStart() {}
 };
 
 int main() {
@@ -153,25 +184,29 @@ int main() {
     VK_PRESENT_MODE_FIFO_KHR,
     VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
     VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
-  viewer->addSurface(window, device, surfaceTraits);
+  auto surface = viewer->addSurface(window, device, surfaceTraits);
 
-  std::vector<pumex::VertexSemantic> requiredSemantics = {
+  std::vector<pumex::VertexSemantic> requiredSemantic = {
     {pumex::VertexSemantic::Position, 3}, {pumex::VertexSemantic::Normal, 3}};
 
-  auto verticesAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
+  constexpr auto MegaBytes = 1024U * 1024U;
+  auto vertexAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-    64 * 1024 * 1024,
+    16 * MegaBytes,
     pumex::DeviceMemoryAllocator::FIRST_FIT);
 
   auto frameBufferAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-    16 * 1024 * 1024,
+    16 * MegaBytes,
     pumex::DeviceMemoryAllocator::FIRST_FIT);
 
-  auto buffersAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
+  auto bufferAllocator = std::make_shared<pumex::DeviceMemoryAllocator>(
     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-    16 * 1024 * 1024,
+    16 * MegaBytes,
     pumex::DeviceMemoryAllocator::FIRST_FIT);
+
+  auto appData = std::make_shared<ApplicationData>(
+    bufferAllocator, vertexAllocator, viewer, requiredSemantic);
 
   std::vector<pumex::QueueTraits> queueTraits{
     {VK_QUEUE_GRAPHICS_BIT, 0, 0.75f}};
@@ -220,45 +255,88 @@ int main() {
   ortho3Droot->setName("ortho3Droot");
   workflow->setRenderOperationNode("Ortho3D", ortho3Droot);
 
-  std::vector<pumex::DescriptorSetLayoutBinding> staticBindings = {
-    {2, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT},
-    {3, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT},
-    {4,
-     1,
-     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-     VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT}};
-  auto staticSetLayout =
-    std::make_shared<pumex::DescriptorSetLayout>(staticBindings);
+  auto materialBinding = pumex::DescriptorSetLayoutBinding{
+    2, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT};
+  auto cameraBinding = pumex::DescriptorSetLayoutBinding{
+    3, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT};
+  auto lightBinding = pumex::DescriptorSetLayoutBinding{
+    4,
+    1,
+    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
+  auto instanceBinding = pumex::DescriptorSetLayoutBinding{
+    5,
+    1,
+    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
 
-  std::vector<pumex::DescriptorSetLayoutBinding> dynamicBindings = {
-    {0,
-     1,
-     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-     VK_SHADER_STAGE_VERTEX_BIT}};
-  auto dynamicSetLayout =
-    std::make_shared<pumex::DescriptorSetLayout>(dynamicBindings);
+  std::vector<pumex::DescriptorSetLayoutBinding> bindings = {
+    materialBinding, cameraBinding, lightBinding, instanceBinding};
+  auto setLayout = std::make_shared<pumex::DescriptorSetLayout>(bindings);
 
   auto pipelineLayout = std::make_shared<pumex::PipelineLayout>();
-  pipelineLayout->descriptorSetLayouts = {staticSetLayout, dynamicSetLayout};
+  pipelineLayout->descriptorSetLayouts.push_back(setLayout);
 
   auto pipelineCache = std::make_shared<pumex::PipelineCache>();
 
   auto pipeline =
     std::make_shared<pumex::GraphicsPipeline>(pipelineCache, pipelineLayout);
-  pipeline->shaderStages = {
-    {VK_SHADER_STAGE_VERTEX_BIT,
-     std::make_shared<pumex::ShaderModule>(viewer, "shaders/3D/vert.spv"),
-     "main"},
-    {VK_SHADER_STAGE_FRAGMENT_BIT,
-     std::make_shared<pumex::ShaderModule>(viewer, "shaders/3D/frag.spv"),
-     "main"}};
+  pipeline->shaderStages = {{VK_SHADER_STAGE_VERTEX_BIT,
+                             std::make_shared<pumex::ShaderModule>(
+                               viewer, "shaders/3D/shader.vert.spv"),
+                             "main"},
+                            {VK_SHADER_STAGE_FRAGMENT_BIT,
+                             std::make_shared<pumex::ShaderModule>(
+                               viewer, "shaders/3D/shader.frag.spv"),
+                             "main"}};
 
-  pipeline->vertexInput = {{0, VK_VERTEX_INPUT_RATE_VERTEX, requiredSemantics}};
+  pipeline->vertexInput = {{0, VK_VERTEX_INPUT_RATE_VERTEX, requiredSemantic}};
 
   pipeline->blendAttachments = {{VK_FALSE, 0xF}};
 
   ortho3Droot->addChild(pipeline);
 
+  auto materialRegistry =
+    std::make_shared<pumex::MaterialRegistry<MaterialData::Material>>(
+      bufferAllocator);
+
+  auto textureRegistry = std::make_shared<pumex::TextureRegistryNull>();
+
+  auto textureSemantic = std::vector<pumex::TextureSemantic>{};
+  auto assetBufferNode = std::make_shared<pumex::AssetBufferNode>(
+    appData->assetData->assetBuffer,
+    std::make_shared<pumex::MaterialSet>(
+      viewer,
+      materialRegistry,
+      textureRegistry,
+      bufferAllocator,
+      textureSemantic),
+    PrimaryRenderMask,
+    0);
+
+  pipeline->addChild(assetBufferNode);
+
+  auto workflowCompiler =
+    std::make_shared<pumex::SingleQueueWorkflowCompiler>();
+  surface->setRenderWorkflow(workflow, workflowCompiler);
+
+  tbb::flow::continue_node<tbb::flow::continue_msg> updateNode(
+    viewer->updateGraph, [=](tbb::flow::continue_msg) {
+      appData->update(
+        viewer,
+        pumex::inSeconds(
+          viewer->getUpdateTime() - viewer->getApplicationStartTime()),
+        pumex::inSeconds(viewer->getUpdateDuration()));
+    });
+
+  tbb::flow::make_edge(viewer->opStartUpdateGraph, updateNode);
+  tbb::flow::make_edge(updateNode, viewer->opEndUpdateGraph);
+
+  viewer->setEventRenderStart(
+    [=](pumex::Viewer* viewer) { appData->renderStart(); });
+
+  surface->setEventSurfaceRenderStart(
+    [=](std::shared_ptr<pumex::Surface> surface) {});
 
   viewer->run();
   return 0;
